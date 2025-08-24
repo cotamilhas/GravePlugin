@@ -1,0 +1,4 @@
+name: GravePlugin
+version: '1.0'
+main: cota.milhas.gravePlugin.GravePlugin
+api-version: '1.21'
