@@ -70,9 +70,21 @@ public final class GravePlugin extends JavaPlugin implements Listener {
             return;
         }
 
-        Location loc = player.getLocation();
         PlayerInventory inventory = player.getInventory();
+        boolean hasItems = false;
 
+        for (ItemStack item : inventory.getContents()) {
+            if (item != null && item.getType() != Material.AIR) {
+                hasItems = true;
+                break;
+            }
+        }
+
+        if (!hasItems) {
+            return;
+        }
+
+        Location loc = player.getLocation();
         event.getDrops().clear();
 
         Block block1 = loc.getBlock();
