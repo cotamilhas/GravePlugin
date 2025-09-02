@@ -70,6 +70,56 @@ public final class GravePlugin extends JavaPlugin implements Listener {
             return;
         }
 
+        List<ItemStack> dropsCopy = new ArrayList<>(event.getDrops());
+        event.getDrops().clear();
+
+        // Armazena os itens para uso posterior
+        List<ItemStack> itemsToStore = new ArrayList<>();
+
+        // Coleta todos os itens do inventário do jogador
+        var inventory = player.getInventory();
+
+        for (int i = 9; i < 36; i++) {
+            ItemStack item = inventory.getItem(i);
+            if (item != null && item.getType() != Material.AIR) {
+                itemsToStore.add(item.clone());
+            }
+        }
+
+        for (int i = 0; i < 9; i++) {
+            ItemStack item = inventory.getItem(i);
+            if (item != null && item.getType() != Material.AIR) {
+                itemsToStore.add(item.clone());
+            }
+        }
+
+        ItemStack helmet = inventory.getHelmet();
+        if (helmet != null && helmet.getType() != Material.AIR) {
+            itemsToStore.add(helmet.clone());
+        }
+
+        ItemStack chestplate = inventory.getChestplate();
+        if (chestplate != null && chestplate.getType() != Material.AIR) {
+            itemsToStore.add(chestplate.clone());
+        }
+
+        ItemStack leggings = inventory.getLeggings();
+        if (leggings != null && leggings.getType() != Material.AIR) {
+            itemsToStore.add(leggings.clone());
+        }
+
+        ItemStack boots = inventory.getBoots();
+        if (boots != null && boots.getType() != Material.AIR) {
+            itemsToStore.add(boots.clone());
+        }
+
+        ItemStack offhand = inventory.getItemInOffHand();
+        if (offhand != null && offhand.getType() != Material.AIR) {
+            itemsToStore.add(offhand.clone());
+        }
+
+        inventory.clear();
+
         Block leftBlock = loc.getBlock();
         Block rightBlock = leftBlock.getRelative(BlockFace.EAST);
 
@@ -81,8 +131,8 @@ public final class GravePlugin extends JavaPlugin implements Listener {
 
         Bukkit.getScheduler().runTask(this, () -> {
             try {
-                org.bukkit.block.data.type.Chest leftData = (org.bukkit.block.data.type.Chest) leftBlock.getBlockData();
-                org.bukkit.block.data.type.Chest rightData = (org.bukkit.block.data.type.Chest) rightBlock.getBlockData();
+                org.bukkit.block.data.type.Chest leftData = (org.bukkit.block.data.type.Chest) Bukkit.createBlockData(Material.CHEST);
+                org.bukkit.block.data.type.Chest rightData = (org.bukkit.block.data.type.Chest) Bukkit.createBlockData(Material.CHEST);
 
                 leftData.setFacing(BlockFace.NORTH);
                 rightData.setFacing(BlockFace.NORTH);
@@ -92,35 +142,30 @@ public final class GravePlugin extends JavaPlugin implements Listener {
 
                 leftBlock.setBlockData(leftData, true);
                 rightBlock.setBlockData(rightData, true);
+
+                // Aguarda a atualização do bloco
+                Chest leftChest = (Chest) leftBlock.getState();
+
+                // Adiciona os itens ao baú
+                int slot = 0;
+                for (ItemStack item : itemsToStore) {
+                    if (slot >= leftChest.getInventory().getSize()) break;
+                    leftChest.getInventory().setItem(slot, item);
+                    slot++;
+                }
+                leftChest.update();
+
             } catch (Exception e) {
-                getLogger().warning("Failed to configure double chest. Items will drop on the ground.");
+                getLogger().warning("Failed to configure double chest. Items will drop on the ground. Error: " + e.getMessage());
+                for (ItemStack item : itemsToStore) {
+                    if (item != null && item.getType() != Material.AIR) {
+                        player.getWorld().dropItemNaturally(loc, item);
+                    }
+                }
+                leftBlock.setType(Material.AIR);
+                rightBlock.setType(Material.AIR);
                 return;
             }
-
-            if (!(leftBlock.getState() instanceof Chest leftChest)) {
-                getLogger().warning("Invalid chest state. Items will drop on the ground.");
-                return;
-            }
-
-            var chestInv = leftChest.getInventory();
-            List<ItemStack> toInsert = new ArrayList<>();
-
-            for (ItemStack it : event.getDrops()) {
-                if (it != null && it.getType() != Material.AIR) {
-                    toInsert.add(it.clone());
-                }
-            }
-
-            int slot = 0;
-            for (ItemStack it : toInsert) {
-                if (slot >= chestInv.getSize()) {
-                    getLogger().warning("Chest full during migration. Remaining items will stay on the ground.");
-                    break;
-                }
-                chestInv.setItem(slot++, it);
-            }
-
-            event.getDrops().clear();
 
             Block signBlock = rightBlock.getRelative(BlockFace.EAST);
             Block headBlock = rightBlock.getRelative(BlockFace.UP);
@@ -133,6 +178,8 @@ public final class GravePlugin extends JavaPlugin implements Listener {
                     directional.setFacing(BlockFace.EAST);
                     signBlock.setBlockData(directional, false);
                 }
+
+                // Atualiza o estado do sign
                 if (signBlock.getState() instanceof org.bukkit.block.Sign signState) {
                     DateTimeFormatter dtf = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm");
                     var front = signState.getSide(org.bukkit.block.sign.Side.FRONT);
@@ -150,10 +197,11 @@ public final class GravePlugin extends JavaPlugin implements Listener {
                     rotatable.setRotation(BlockFace.WEST);
                     headBlock.setBlockData(rotatable);
                 }
+
+                // Atualiza o estado da cabeça
                 if (headBlock.getState() instanceof Skull skull) {
                     skull.setOwningPlayer(player);
                     skull.update();
-                    headBlock.setMetadata("graveHead", new FixedMetadataValue(this, true));
                 }
             }
 
