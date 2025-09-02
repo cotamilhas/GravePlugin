@@ -16,14 +16,14 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.entity.PlayerDeathEvent;
 import org.bukkit.inventory.ItemStack;
-import org.bukkit.inventory.PlayerInventory;
 import org.bukkit.block.data.BlockData;
 import org.bukkit.block.data.Directional;
 import org.bukkit.block.Skull;
 import net.kyori.adventure.text.Component;
 
 import java.time.format.DateTimeFormatter;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.List;
 
 public final class GravePlugin extends JavaPlugin implements Listener {
 
@@ -41,157 +41,171 @@ public final class GravePlugin extends JavaPlugin implements Listener {
     @EventHandler
     public void onBlockBreak(BlockBreakEvent event) {
         Block block = event.getBlock();
-
         if (!block.hasMetadata("graveBlock")) return;
 
         event.setDropItems(false);
 
-        if (block.getType() == Material.CHEST) {
-            if (block.getState() instanceof Chest chest) {
-                for (ItemStack item : chest.getBlockInventory().getContents()) {
-                    if (item != null && item.getType() != Material.AIR) {
-                        block.getWorld().dropItemNaturally(block.getLocation(), item);
-                    }
+        if (block.getType() == Material.CHEST && block.getState() instanceof Chest chest) {
+            for (ItemStack item : chest.getBlockInventory().getContents()) {
+                if (item != null && item.getType() != Material.AIR) {
+                    block.getWorld().dropItemNaturally(block.getLocation(), item);
                 }
-                chest.getBlockInventory().clear();
             }
+            chest.getBlockInventory().clear();
         }
     }
 
     @EventHandler
     public void onPlayerDeath(PlayerDeathEvent event) {
         Player player = event.getEntity();
+        if (player.getGameMode() != GameMode.SURVIVAL && player.getGameMode() != GameMode.ADVENTURE) return;
+        if (event.getKeepInventory()) return;
 
-        if (player.getGameMode() != GameMode.SURVIVAL && player.getGameMode() != GameMode.ADVENTURE) {
+        boolean hasDrops = event.getDrops().stream().anyMatch(i -> i != null && i.getType() != Material.AIR);
+        if (!hasDrops) return;
+
+        Location loc = findSpot(player.getLocation());
+        if (loc == null) {
+            getLogger().warning("Could not create a grave, items will drop on the ground (vanilla).");
             return;
         }
 
-        if (event.getKeepInventory()) {
-            return;
-        }
+        Block leftBlock = loc.getBlock();
+        Block rightBlock = leftBlock.getRelative(BlockFace.EAST);
 
-        PlayerInventory inventory = player.getInventory();
-        boolean hasItems = false;
+        leftBlock.setType(Material.CHEST);
+        rightBlock.setType(Material.CHEST);
 
-        for (ItemStack item : inventory.getContents()) {
-            if (item != null && item.getType() != Material.AIR) {
-                hasItems = true;
-                break;
+        leftBlock.setMetadata("graveBlock", new FixedMetadataValue(this, true));
+        rightBlock.setMetadata("graveBlock", new FixedMetadataValue(this, true));
+
+        Bukkit.getScheduler().runTask(this, () -> {
+            try {
+                org.bukkit.block.data.type.Chest leftData = (org.bukkit.block.data.type.Chest) leftBlock.getBlockData();
+                org.bukkit.block.data.type.Chest rightData = (org.bukkit.block.data.type.Chest) rightBlock.getBlockData();
+
+                leftData.setFacing(BlockFace.NORTH);
+                rightData.setFacing(BlockFace.NORTH);
+
+                leftData.setType(org.bukkit.block.data.type.Chest.Type.LEFT);
+                rightData.setType(org.bukkit.block.data.type.Chest.Type.RIGHT);
+
+                leftBlock.setBlockData(leftData, true);
+                rightBlock.setBlockData(rightData, true);
+            } catch (Exception e) {
+                getLogger().warning("Failed to configure double chest. Items will drop on the ground.");
+                return;
             }
-        }
 
-        if (!hasItems) {
-            return;
-        }
+            if (!(leftBlock.getState() instanceof Chest leftChest)) {
+                getLogger().warning("Invalid chest state. Items will drop on the ground.");
+                return;
+            }
 
-        Location loc = player.getLocation();
-        event.getDrops().clear();
+            var chestInv = leftChest.getInventory();
+            List<ItemStack> toInsert = new ArrayList<>();
 
-        Block block1 = loc.getBlock();
-        Block block2 = block1.getRelative(BlockFace.EAST);
-
-        block1.setType(Material.CHEST);
-        block2.setType(Material.CHEST);
-
-        block1.setMetadata("graveBlock", new FixedMetadataValue(this, true));
-        block2.setMetadata("graveBlock", new FixedMetadataValue(this, true));
-
-        org.bukkit.block.data.type.Chest chestData1 = (org.bukkit.block.data.type.Chest) block1.getBlockData();
-        chestData1.setType(org.bukkit.block.data.type.Chest.Type.LEFT);
-        block1.setBlockData(chestData1, true);
-
-        org.bukkit.block.data.type.Chest chestData2 = (org.bukkit.block.data.type.Chest) block2.getBlockData();
-        chestData2.setType(org.bukkit.block.data.type.Chest.Type.RIGHT);
-        block2.setBlockData(chestData2, true);
-
-        if (block1.getState() instanceof org.bukkit.block.Chest chest) {
-            org.bukkit.inventory.Inventory chestInv = chest.getInventory();
-
-            int chestSlot = 0;
-
-            for (int i = 9; i < 36; i++) {
-                ItemStack item = inventory.getItem(i);
-                if (item != null && item.getType() != Material.AIR) {
-                    chestInv.setItem(chestSlot, item.clone());
+            for (ItemStack it : event.getDrops()) {
+                if (it != null && it.getType() != Material.AIR) {
+                    toInsert.add(it.clone());
                 }
-                chestSlot++;
             }
 
-            for (int i = 0; i < 9; i++) {
-                ItemStack item = inventory.getItem(i);
-                if (item != null && item.getType() != Material.AIR) {
-                    chestInv.setItem(chestSlot, item.clone());
+            int slot = 0;
+            for (ItemStack it : toInsert) {
+                if (slot >= chestInv.getSize()) {
+                    getLogger().warning("Chest full during migration. Remaining items will stay on the ground.");
+                    break;
                 }
-                chestSlot++;
+                chestInv.setItem(slot++, it);
             }
 
-            ItemStack helmet = inventory.getHelmet();
-            if (helmet != null && helmet.getType() != Material.AIR) {
-                chestInv.setItem(chestInv.getSize() - 5, helmet.clone());
+            event.getDrops().clear();
+
+            Block signBlock = rightBlock.getRelative(BlockFace.EAST);
+            Block headBlock = rightBlock.getRelative(BlockFace.UP);
+
+            if (signBlock.getType().isAir()) {
+                signBlock.setType(Material.OAK_WALL_SIGN);
+                signBlock.setMetadata("graveBlock", new FixedMetadataValue(this, true));
+                BlockData data = signBlock.getBlockData();
+                if (data instanceof Directional directional) {
+                    directional.setFacing(BlockFace.EAST);
+                    signBlock.setBlockData(directional, false);
+                }
+                if (signBlock.getState() instanceof org.bukkit.block.Sign signState) {
+                    DateTimeFormatter dtf = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm");
+                    var front = signState.getSide(org.bukkit.block.sign.Side.FRONT);
+                    front.line(0, Component.text("§cRIP"));
+                    front.line(1, Component.text(player.getName()));
+                    front.line(2, Component.text(dtf.format(java.time.LocalDateTime.now())));
+                    signState.update();
+                }
             }
 
-            ItemStack chestplate = inventory.getChestplate();
-            if (chestplate != null && chestplate.getType() != Material.AIR) {
-                chestInv.setItem(chestInv.getSize() - 4, chestplate.clone());
+            if (headBlock.getType().isAir()) {
+                headBlock.setType(Material.PLAYER_HEAD);
+                headBlock.setMetadata("graveBlock", new FixedMetadataValue(this, true));
+                if (headBlock.getBlockData() instanceof Rotatable rotatable) {
+                    rotatable.setRotation(BlockFace.WEST);
+                    headBlock.setBlockData(rotatable);
+                }
+                if (headBlock.getState() instanceof Skull skull) {
+                    skull.setOwningPlayer(player);
+                    skull.update();
+                    headBlock.setMetadata("graveHead", new FixedMetadataValue(this, true));
+                }
             }
 
-            ItemStack leggings = inventory.getLeggings();
-            if (leggings != null && leggings.getType() != Material.AIR) {
-                chestInv.setItem(chestInv.getSize() - 3, leggings.clone());
-            }
+            player.sendMessage("§eYou died at §cX:" + loc.getBlockX() + " Y:" + loc.getBlockY() + " Z:" + loc.getBlockZ());
+        });
+    }
 
-            ItemStack boots = inventory.getBoots();
-            if (boots != null && boots.getType() != Material.AIR) {
-                chestInv.setItem(chestInv.getSize() - 2, boots.clone());
-            }
+    private Location findSpot(Location deathLoc) {
+        int radius = 5;
+        int minY = deathLoc.getWorld().getMinHeight();
+        int maxY = deathLoc.getWorld().getMaxHeight() - 2;
 
-            ItemStack offhand = inventory.getItemInOffHand();
-            if (offhand.getType() != Material.AIR) {
-                chestInv.setItem(chestInv.getSize() - 1, offhand.clone());
-            }
+        int[] dyOptions = {0, 1, -1, 2, -2};
 
-            inventory.clear();
+        for (int dy : dyOptions) {
+            for (int r = 0; r <= radius; r++) {
+                for (int dx = -r; dx <= r; dx++) {
+                    for (int dz = -r; dz <= r; dz++) {
+                        Location cand = deathLoc.clone().add(dx, dy, dz);
+                        int y = cand.getBlockY();
+                        if (y <= minY || y >= maxY) continue;
+
+                        if (isAirSpaceForGrave(cand)) {
+                            return cand;
+                        }
+                    }
+                }
+            }
         }
+        return null;
+    }
 
-        Block signBlock = block2.getRelative(BlockFace.EAST);
-        signBlock.setType(Material.OAK_WALL_SIGN);
-        signBlock.setMetadata("graveBlock", new FixedMetadataValue(this, true));
+    private boolean isAirSpaceForGrave(Location base) {
+        Block ground = base.getBlock().getRelative(BlockFace.DOWN);
+        if (!ground.getType().isSolid() || isContainer(ground.getType())) return false;
 
-        BlockData data = signBlock.getBlockData();
-        if (data instanceof Directional directional) {
-            directional.setFacing(BlockFace.EAST);
-            signBlock.setBlockData(directional, false);
-        }
+        Block chest1 = base.getBlock();
+        Block chest2 = chest1.getRelative(BlockFace.EAST);
+        Block sign = chest2.getRelative(BlockFace.EAST);
+        Block head = chest2.getRelative(BlockFace.UP);
 
-        Block headBlock = block2.getRelative(BlockFace.UP);
-        headBlock.setType(Material.PLAYER_HEAD);
-        headBlock.setMetadata("graveBlock", new FixedMetadataValue(this, true));
+        return chest1.getType().isAir()
+                && chest2.getType().isAir()
+                && sign.getType().isAir()
+                && head.getType().isAir();
+    }
 
-        if (headBlock.getBlockData() instanceof Rotatable rotatable) {
-            rotatable.setRotation(BlockFace.WEST);
-            headBlock.setBlockData(rotatable);
-        }
-
-        if (headBlock.getState() instanceof Skull skull) {
-            skull.setOwningPlayer(player);
-            skull.update();
-            headBlock.setMetadata("graveHead", new FixedMetadataValue(this, true));
-        }
-
-        if (signBlock.getState() instanceof org.bukkit.block.Sign signState) {
-            DateTimeFormatter dtf = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm");
-            var front = signState.getSide(org.bukkit.block.sign.Side.FRONT);
-
-            front.line(0, Component.text("§cRIP"));
-            front.line(1, Component.text(player.getName()));
-            front.line(2, Component.text(dtf.format(java.time.LocalDateTime.now())));
-
-            signState.update();
-        }
-
-        player.sendMessage("§eYou died at" +
-                " §cX:" + loc.getBlockX() +
-                " Y:" + loc.getBlockY() +
-                " Z:" + loc.getBlockZ());
+    private boolean isContainer(Material mat) {
+        return mat == Material.CHEST
+                || mat == Material.TRAPPED_CHEST
+                || mat == Material.BARREL
+                || mat.name().endsWith("SHULKER_BOX")
+                || mat == Material.ENDER_CHEST;
     }
 }
